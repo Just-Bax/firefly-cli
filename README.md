@@ -61,6 +61,10 @@ curl -fsSL https://raw.githubusercontent.com/Just-Bax/firefly-cli/master/install
 
 Then open a **new** terminal and run `firefly login`.
 
+The installer also fetches the Chromium build Playwright signs in with, about 150MB.
+If that step is skipped or interrupted, `firefly setup` does it, and `firefly login`
+fetches it itself rather than failing.
+
 ## Sign in
 
 ```console
@@ -123,6 +127,7 @@ they expire. The browser login is better wherever it works.
 
 | Command | Does |
 |---|---|
+| `firefly setup` | download the browser used for signing in |
 | `firefly login` | sign in, by browser or `--curl` |
 | `firefly whoami` | what is stored, and when it expires |
 | `firefly image PROMPT` | generate an image |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -143,7 +144,7 @@ def _run(
     captures: list[Capture] = []
 
     with playwright() as p:
-        context = _launch(p, headless)
+        context = _launch(p, headless, report)
         try:
             context.on("request", lambda request: _queue(request, pending))
             page = context.pages[0] if context.pages else context.new_page()
@@ -338,7 +339,7 @@ def _import_playwright() -> Any:
     return sync_playwright
 
 
-def _launch(p: Any, headless: bool = False) -> Any:
+def _launch(p: Any, headless: bool = False, report: Progress | None = None) -> Any:
     from .config import load as load_config
 
     config = load_config()
@@ -363,15 +364,43 @@ def _launch(p: Any, headless: bool = False) -> Any:
     try:
         return p.chromium.launch_persistent_context(**options)
     except Exception as exc:
-        if _looks_like_missing_browser(exc):
-            raise LoginFailed("The sign-in browser is not installed.\nRun: firefly setup") from exc
         if _looks_like_busy_profile(exc):
             which = config.browser_channel or "a browser"
             raise LoginFailed(
                 f"That browser profile is already open in {which}.\n"
                 "Close every window of it and try again."
             ) from exc
+        if not _looks_like_missing_browser(exc):
+            raise LoginFailed(f"Could not start the browser: {exc}") from exc
+        _fetch_browser(config, report)
+
+    try:
+        return p.chromium.launch_persistent_context(**options)
+    except Exception as exc:
         raise LoginFailed(f"Could not start the browser: {exc}") from exc
+
+
+def _fetch_browser(config: Any, report: Progress | None) -> None:
+    """Download the browser mid-login, rather than sending the user away.
+
+    Only the bundled Chromium can be fetched. A configured channel or path names
+    a browser Adobe's sign-in is meant to see as ordinary, so pulling Chromium
+    would not fix it and is not what was asked for.
+    """
+    if config.browser_path or config.browser_channel:
+        which = config.browser_path or config.browser_channel
+        raise LoginFailed(
+            f"The browser this is set to use ({which}) is not installed here.\n"
+            'Install it, or clear the setting: firefly config set browser_channel ""'
+        )
+
+    if report:
+        report("sign-in browser missing, downloading it once (about 150MB)")
+    if not install_chromium():
+        raise LoginFailed(
+            "The sign-in browser could not be downloaded.\n"
+            "Check your connection, then run: firefly setup"
+        )
 
 
 def _profile_dir(configured: str) -> Path:
@@ -415,8 +444,36 @@ def _browsers_root() -> Path:
     return Path.home() / ".cache" / "ms-playwright"
 
 
+def _pinned_builds() -> list[str]:
+    """The browser directories this Playwright expects, from its own manifest.
+
+    Playwright pins a build number per version, and the marker file is written
+    only once a download finishes.
+    """
+    import playwright
+
+    manifest = Path(playwright.__file__).parent / "driver" / "package" / "browsers.json"
+    entries = json.loads(manifest.read_text(encoding="utf-8"))["browsers"]
+    return [
+        f"{entry['name'].replace('-', '_')}-{entry['revision']}"
+        for entry in entries
+        if entry["name"].startswith("chromium") and entry.get("installByDefault")
+    ]
+
+
 def browser_is_installed() -> bool:
-    """Look for the unpacked browser on disk. Asking Playwright itself would
-    start its driver, which prints teardown noise on a plain status check."""
+    """Whether every browser build this Playwright pins is on disk and complete.
+
+    Matching the directory name alone accepts a chromium left behind by some
+    other project, which sits in the same place under a different build number
+    and cannot launch. That reported ready here while the launch failed, so
+    'firefly setup' sent the user to 'firefly setup'. An unreadable manifest
+    counts as missing: installing again is harmless, claiming a browser that
+    will not start is not.
+    """
     root = _browsers_root()
-    return root.is_dir() and any(root.glob("chromium*"))
+    try:
+        wanted = _pinned_builds()
+    except Exception:
+        return False
+    return bool(wanted) and all((root / name / "INSTALLATION_COMPLETE").exists() for name in wanted)

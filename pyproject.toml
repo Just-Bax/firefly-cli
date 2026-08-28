@@ -1,6 +1,6 @@
 [project]
 name = "firefly-cli"
-version = "1.0.0"
+version = "1.0.1"
 description = "firefly CLI: generate images and video with Adobe Firefly from the command line"
 readme = "README.md"
 requires-python = ">=3.11"
